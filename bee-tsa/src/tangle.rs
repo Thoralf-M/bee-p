@@ -66,31 +66,26 @@ impl TsaTangle {
                 continue
             }
 
-            match protocol_tangle().get(&id) {
-                Some(tx_ref) => {
+            // unwrap is safe since of the is_solid check above
+            let tx_ref = protocol_tangle().get(&id).unwrap();
 
-                    let otrsi = min(
-                        self.get_otrsi(&tx_ref.trunk()).unwrap(),
-                        self.get_otrsi(&tx_ref.branch()).unwrap(),
-                    );
-                    let ytrsi = max(
-                        self.get_ytrsi(&tx_ref.trunk()).unwrap(),
-                        self.get_ytrsi(&tx_ref.branch()).unwrap(),
-                    );
+            // therefore also the parents are solid
+            let otrsi = min(
+                self.get_otrsi(&tx_ref.trunk()).unwrap(),
+                self.get_otrsi(&tx_ref.branch()).unwrap(),
+            );
+            let ytrsi = max(
+                self.get_ytrsi(&tx_ref.trunk()).unwrap(),
+                self.get_ytrsi(&tx_ref.branch()).unwrap(),
+            );
 
-                    let mut metadata = TsaMetadata::new();
-                    metadata.otrsi = Some(otrsi);
-                    metadata.ytrsi = Some(ytrsi);
-
-                    self.metadata.insert(id.clone(), metadata);
-
-                    // propagate state to solid children
-                    for child in protocol_tangle().get_children(&id).iter() {
-                        children.push(*child);
-                    }
-
-                }
-                None => continue
+            let mut metadata = TsaMetadata::new();
+            metadata.otrsi = Some(otrsi);
+            metadata.ytrsi = Some(ytrsi);
+            self.metadata.insert(id.clone(), metadata);
+            
+            for child in protocol_tangle().get_children(&id).iter() {
+                children.push(*child);
             }
 
         }
