@@ -23,55 +23,83 @@ const OTRSI_DELTA: u64 = 7; // C2
 const BELOW_MAX_DEPTH: u64 = 15; // M
 
 pub struct TsaTangle {
-    pub tsa_metadata: DashMap<Hash, TsaMetadata>,
+    pub metadata: DashMap<Hash, TsaMetadata>,
 }
 
 impl TsaTangle {
 
-    fn get_ytrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
-        let x = match self.tsa_metadata.get(&hash) {
-            Some(metadata) => metadata.ytrsi,
-            None => None
-        };
-    }
-
-    fn get_otrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
-        let x = match self.tsa_metadata.get(&hash) {
-            Some(metadata) => metadata.otrsi,
-            None => None
-        };
-    }
-
     pub fn insert(&self, transaction: BundledTransaction, hash: Hash) -> Option<TransactionRef> {
-        if let Some(tx) = protocol_tangle().insert(transaction, hash.clone(), TransactionMetadata::new()) {
-            self.propagate_otrsi_and_ytrsi(&hash, &tx);
-            return Some(tx);
+        if let Some(tx_ref) = protocol_tangle().insert(transaction, hash.clone(), TransactionMetadata::new()) {
+            self.propagate_otrsi_and_ytrsi(&hash);
+            return Some(tx_ref);
         }
         None
     }
 
-    fn propagate_otrsi_and_ytrsi(&self, hash: &Hash, tx_ref: &TransactionRef) {
+    fn propagate_otrsi_and_ytrsi(&self, root: &Hash) {
 
-        // check if transaction is solid
-        if protocol_tangle().is_solid_transaction(&hash) {
+        // if the parents of this incoming transaction are solid,
+        // or in other words, if this incoming transaction is solid,
+        // this function  will propagate the otrsi and ytrsi of the parents to the incoming transaction.
+        // in case of the incoming transaction is not solid, it won't propagate.
+        // the idea to not propagate information in the "unsolid" case is to avoid unnecessary tangle walks.
 
-            let otrsi = min(
-                self.get_otrsi(&tx_ref.trunk()).unwrap(),
-                self.get_otrsi(&tx_ref.branch()).unwrap(),
-            );
-            let ytrsi = max(
-                self.get_ytrsi(&tx_ref.trunk()).unwrap(),
-                self.get_ytrsi(&tx_ref.branch()).unwrap(),
-            );
+        // if the children of a transaction already did arrive before, it implies that this incoming transaction was a missing link
+        // in this case, if the incoming transaction is solid, otrsi and ytrsi values need to be propagated to the future cone of the incoming transaction
 
-            let mut metadata = TsaMetadata::new();
-            metadata.otrsi = Some(otrsi);
-            metadata.ytrsi = Some(ytrsi);
+        // if a milestone transaction arrives, the same process happens.
+        // if it's solid, it will propagate state to the future cone.
 
-            self.tsa_metadata.insert(hash.clone(), metadata);
+        let mut children = vec![*root];
+
+        while let Some(id) = children.pop() {
+
+            if !protocol_tangle().is_solid_transaction(&id) {
+                continue
+            }
+
+            match protocol_tangle().get(&id) {
+                Some(tx_ref) => {
+
+                    let otrsi = min(
+                        self.get_otrsi(&tx_ref.trunk()).unwrap(),
+                        self.get_otrsi(&tx_ref.branch()).unwrap(),
+                    );
+                    let ytrsi = max(
+                        self.get_ytrsi(&tx_ref.trunk()).unwrap(),
+                        self.get_ytrsi(&tx_ref.branch()).unwrap(),
+                    );
+
+                    let mut metadata = TsaMetadata::new();
+                    metadata.otrsi = Some(otrsi);
+                    metadata.ytrsi = Some(ytrsi);
+
+                    self.metadata.insert(id.clone(), metadata);
+
+                    // propagate state to solid children
+                    for child in protocol_tangle().get_children(&id).iter() {
+                        children.push(*child);
+                    }
+
+                }
+                None => continue
+            }
 
         }
+    }
 
+    fn get_ytrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
+        match self.metadata.get(&hash) {
+            Some(metadata) => metadata.ytrsi,
+            None => None
+        }
+    }
+
+    fn get_otrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
+        match self.metadata.get(&hash) {
+            Some(metadata) => metadata.otrsi,
+            None => None
+        }
     }
 
 }
