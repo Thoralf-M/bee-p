@@ -11,6 +11,7 @@ members = [
 	"bee-snapshot",
 	# "bee-storage",
 	"bee-tangle",
+    "bee-tsa",
 	"bee-test",
 	"bee-transaction",
 ]
