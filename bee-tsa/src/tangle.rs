@@ -38,17 +38,25 @@ impl TsaTangle {
 
     fn propagate_otrsi_and_ytrsi(&self, root: &Hash) {
 
+        // this function tries to propagate the otrsi and ytrsi values so that
+        // the TSA can be performed on the most accurate values.
+
         // if the parents of this incoming transaction are solid,
         // or in other words, if this incoming transaction is solid,
-        // this function  will propagate the otrsi and ytrsi of the parents to the incoming transaction.
-        // in case of the incoming transaction is not solid, it won't propagate.
-        // the idea to not propagate information in the "unsolid" case is to avoid unnecessary tangle walks.
+        // this function will propagate the otrsi and ytrsi of the parents to the incoming transaction.
 
-        // if the children of a transaction already did arrive before, it implies that this incoming transaction was a missing link
-        // in this case, if the incoming transaction is solid, otrsi and ytrsi values need to be propagated to the future cone of the incoming transaction
+        // in case of an attack, missing transactions might not arrive at all.
+        // the propagation of otrsi and ytrsi to a non-solid cone might be unnecessary, since the TSA
+        // would not select transactions from that cone.
+        // therefore, if the incoming transaction is non-solid, it won't propagate.
+        // this helps to avoid unnecessary tangle walks.
 
-        // if a milestone transaction arrives, the same process happens.
-        // if it's solid, it will propagate state to the future cone.
+        // if the children of a transaction already did arrive before the parent,it implies that the incoming transaction was missing.
+        // in this case, if the incoming transaction is solid, otrsi and ytrsi values need to be propagated to the solid future cone
+        // since they don't have otrsi and ytrsi values set.
+
+        // if a milestone transaction arrives, otrsi and ytrsi values for transactions do change.
+        // because of this, the past and future cones ne
 
         let mut children = vec![*root];
 
