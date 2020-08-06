@@ -19,13 +19,13 @@ pub enum Score {
     NonLazy = 2,
 }
 
-pub struct TsaMetadata {
+pub struct WutrsMetadata {
     pub otrsi: Option<MilestoneIndex>, // can only be missing if ma and pa were missing; same for ytrsi
     pub ytrsi: Option<MilestoneIndex>,
     pub selected: u8, //number of times we selected it in the TSA
 }
 
-impl TsaMetadata {
+impl WutrsMetadata {
     pub fn new() -> Self {
         Self {
             otrsi: None,
