@@ -12,30 +12,29 @@
 use bee_protocol::tangle::{TransactionMetadata, MsTangle, tangle as ms_tangle};
 use bee_crypto::ternary::Hash;
 use bee_transaction::{bundled::BundledTransaction, Vertex};
-use bee_tangle::{Tangle, TransactionRef};
+use bee_tangle::{Tangle, TransactionRef, traversal};
 use dashmap::DashMap;
 use std::cmp::{min, max};
 use bee_protocol::MilestoneIndex;
-use crate::model::WutrsMetadata;
-use std::ops::Add;
+use crate::model::{Score,  WurtsTransactionMetadata};
+use std::collections::HashSet;
 
 const YTRSI_DELTA: u32 = 2; // C1
 const OTRSI_DELTA: u32 = 7; // C2
 const BELOW_MAX_DEPTH: u32 = 15; // M
 
 pub struct WutrsTangle {
-    pub metadata: DashMap<Hash, WutrsMetadata>,
-    pub last_milestone_index: MilestoneIndex,
+    pub transaction_metadata: DashMap<Hash, WurtsTransactionMetadata>,
+    pub last_solid_milestone_index_known: MilestoneIndex,
 }
 
 impl WutrsTangle {
 
-    pub fn insert(&self, transaction: BundledTransaction, hash: Hash) -> Option<TransactionRef> {
+    pub fn insert(&mut self, transaction: BundledTransaction, hash: Hash) -> Option<TransactionRef> {
         if let Some(tx_ref) = ms_tangle().insert(transaction, hash.clone(), TransactionMetadata::new()) {
-            // check if a new milestone arrived
-            if self.last_milestone_index != ms_tangle().get_last_milestone_index() {
-                self.last_milestone_index.add(MilestoneIndex(1));
-                self.set_otrsi_and_ytrsi_for_incoming_milestone(&ms_tangle().get_milestone_hash(self.last_milestone_index).unwrap())
+            if self.last_solid_milestone_index_known != ms_tangle().get_last_solid_milestone_index() {
+                self.last_solid_milestone_index_known = ms_tangle().get_last_solid_milestone_index();
+                self.update_confirmed_cone(self.last_solid_milestone_index_known);
             }
             self.propagate_otrsi_and_ytrsi(&hash);
             return Some(tx_ref);
@@ -43,12 +42,43 @@ impl WutrsTangle {
         None
     }
 
-    // this function sets the otrsi and ytrsi for the incoming milestone
-    fn set_otrsi_and_ytrsi_for_incoming_milestone(&self, root: &Hash) {
-        let mut metadata = WutrsMetadata::new();
-        metadata.otrsi = Some(MilestoneIndex(*ms_tangle().get_last_milestone_index() - BELOW_MAX_DEPTH));
-        metadata.ytrsi = Some(ms_tangle().get_last_milestone_index());
-        self.metadata.insert(root.clone(), metadata);
+    // once a milestone arrives, update otrsi and ytrsi of all transactions that are confirmed by this milestone.
+    // set otrsi and ytrsi values of confirmed transactions to:
+    // otrsi=milestone_index
+    // ytrsi=milestone_index
+    // otrsi or ytrsi of transactions that are confirmed by a previous milestone won't get updated.
+    fn update_confirmed_cone(&mut self, milestone_index: MilestoneIndex) {
+
+        let ms_hash = ms_tangle().get_milestone_hash(milestone_index).unwrap();
+
+        if ms_tangle().is_solid_transaction(&ms_hash) {
+
+            let mut parents = vec![ms_hash];
+
+            while let Some(tx_hash) = parents.pop() {
+
+                self.transaction_metadata.get_mut(&tx_hash).unwrap().confirmed = Some(milestone_index);
+
+                // unwrap is safe since the transaction is solid
+                let tx_ref = ms_tangle().get(&tx_hash).unwrap();
+
+                let mut metadata = WurtsTransactionMetadata::new();
+                metadata.otrsi = Some(milestone_index);
+                metadata.ytrsi = Some(milestone_index);
+                self.transaction_metadata.insert(tx_hash.clone(), metadata);
+
+                if self.transaction_metadata.get(&tx_ref.trunk()).unwrap().confirmed.is_none() {
+                    parents.push(tx_ref.trunk().clone());
+                }
+
+                if self.transaction_metadata.get(&tx_ref.branch()).unwrap().confirmed.is_none() {
+                    parents.push(tx_ref.branch().clone());
+                }
+
+            }
+
+        }
+
     }
 
     /*
@@ -92,10 +122,10 @@ impl WutrsTangle {
                 self.get_ytrsi(&tx_ref.branch()).unwrap(),
             );
 
-            let mut metadata = WutrsMetadata::new();
+            let mut metadata = WurtsTransactionMetadata::new();
             metadata.otrsi = Some(otrsi);
             metadata.ytrsi = Some(ytrsi);
-            self.metadata.insert(id.clone(), metadata);
+            self.transaction_metadata.insert(id.clone(), metadata);
 
             for child in ms_tangle().get_children(&id).iter() {
                 children.push(*child);
@@ -105,17 +135,73 @@ impl WutrsTangle {
     }
 
     fn get_ytrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
-        match self.metadata.get(&hash) {
+        match self.transaction_metadata.get(&hash) {
             Some(metadata) => metadata.ytrsi,
             None => None
         }
     }
 
     fn get_otrsi(&self, hash: &Hash) -> Option<MilestoneIndex>{
-        match self.metadata.get(&hash) {
+        match self.transaction_metadata.get(&hash) {
             Some(metadata) => metadata.otrsi,
             None => None
         }
     }
 
+    fn get_tip_score(&self, tx_hash: &Hash) -> Score {
+
+        let tx_ref = ms_tangle().get(tx_hash).unwrap();
+        let ytrsi = self.transaction_metadata.get(tx_hash).unwrap().ytrsi.unwrap();
+        let otrsi = self.transaction_metadata.get(tx_hash).unwrap().otrsi.unwrap();
+
+        if *ms_tangle().get_last_solid_milestone_index() - *ytrsi > YTRSI_DELTA {
+            return Score::Lazy;
+        }
+
+        if *ms_tangle().get_last_solid_milestone_index() - *otrsi > BELOW_MAX_DEPTH {
+            return Score::Lazy;
+        }
+
+        let mut parent_otrsi_check = 2;
+
+        if let Some(ma) = self.transaction_metadata.get(&tx_ref.trunk()) {
+            // NOTE: removed as suggested by muxxer
+            // if ma.score.unwrap_or(Score::NonLazy) == Score::Lazy {
+            //     return Score::Lazy;
+            // }
+
+            if *ms_tangle().get_last_solid_milestone_index() - *ma.otrsi.unwrap() > OTRSI_DELTA {
+                parent_otrsi_check -= 1;
+            }
+        }
+
+        if let Some(pa) = self.transaction_metadata.get(&tx_ref.branch()) {
+            // NOTE: removed as suggested by muxxer
+            // if pa.score.unwrap_or(Score::NonLazy) == Score::Lazy {
+            //     return Score::Lazy;
+            // }
+
+            if *ms_tangle().get_last_solid_milestone_index() - *pa.otrsi.unwrap() > OTRSI_DELTA {
+                parent_otrsi_check -= 1;
+            }
+        }
+
+        if parent_otrsi_check == 0 {
+            println!("[get_score ] both parents failed 'parent_otrsi_check");
+
+            return Score::Lazy;
+        }
+
+        if parent_otrsi_check == 1 {
+            println!(
+                "[get_score ] one of the parents failed 'parent_otrsi_check (makes tip semi-lazy)"
+            );
+
+            return Score::SemiLazy;
+        }
+
+        Score::NonLazy
+    }
+
 }
+

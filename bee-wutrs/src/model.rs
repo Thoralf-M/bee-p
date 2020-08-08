@@ -19,17 +19,19 @@ pub enum Score {
     NonLazy = 2,
 }
 
-pub struct WutrsMetadata {
+pub struct WurtsTransactionMetadata {
     pub otrsi: Option<MilestoneIndex>, // can only be missing if ma and pa were missing; same for ytrsi
     pub ytrsi: Option<MilestoneIndex>,
+    pub confirmed: Option<MilestoneIndex>,
     pub selected: u8, //number of times we selected it in the TSA
 }
 
-impl WutrsMetadata {
+impl WurtsTransactionMetadata {
     pub fn new() -> Self {
         Self {
             otrsi: None,
             ytrsi: None,
+            confirmed: None,
             selected: 0,
         }
     }
