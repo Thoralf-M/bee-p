@@ -13,17 +13,17 @@ use bee_protocol::MilestoneIndex;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub enum Score {
+pub(crate) enum Score {
     Lazy = 0,
     SemiLazy = 1,
     NonLazy = 2,
 }
 
-pub struct WurtsTransactionMetadata {
+pub(crate) struct WurtsTransactionMetadata {
     pub otrsi: Option<MilestoneIndex>, // can only be missing if ma and pa were missing; same for ytrsi
     pub ytrsi: Option<MilestoneIndex>,
     pub confirmed: Option<MilestoneIndex>,
-    pub selected: u8, //number of times we selected it in the TSA
+    pub selected: u8, // number of times we selected it in the TSA
 }
 
 impl WurtsTransactionMetadata {

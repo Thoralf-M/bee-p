@@ -7,7 +7,7 @@ description = ""
 readme = "README.md"
 repository = "https://github.com/iotaledger/bee"
 license = "Apache-2.0"
-keywords = ["iota", "tangle", "bee", "framework", "tsa"]
+keywords = ["iota", "tangle", "bee", "framework", "wurts"]
 homepage = "https://www.iota.org"
 
 [dependencies]
@@ -16,4 +16,4 @@ bee-protocol = { path = "../bee-protocol" }
 bee-tangle = { path = "../bee-tangle" }
 bee-transaction = { path = "../bee-transaction" }
 
-dashmap = "3.11"
+rand = "0.7.3"

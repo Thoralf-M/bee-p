@@ -155,6 +155,14 @@ where
         self.children.get(hash).map_or(0, |r| r.value().len())
     }
 
+    pub fn tips(&self) -> Vec<Hash> {
+        let mut ret = Vec::new();
+        for tip in self.tips.iter() {
+            ret.push(*tip);
+        }
+        ret
+    }
+
     #[cfg(test)]
     pub fn clear(&mut self) {
         self.vertices.clear();
