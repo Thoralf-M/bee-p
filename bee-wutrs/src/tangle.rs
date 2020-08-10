@@ -20,7 +20,7 @@ use bee_transaction::{bundled::BundledTransaction, Vertex};
 use rand::Rng;
 use std::{
     cmp::{max, min},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
 };
 
 const YTRSI_DELTA: u32 = 2; // C1
@@ -35,89 +35,103 @@ pub struct WutrsTangle {
 impl WutrsTangle {
     pub fn insert(&mut self, transaction: BundledTransaction, hash: Hash) -> Option<TransactionRef> {
         if let Some(tx_ref) = ms_tangle().insert(transaction, hash.clone(), TransactionMetadata::new()) {
+            // ensures that each inserted transaction has a wurts-metadata
+            self.transaction_metadata
+                .insert(hash.clone(), WurtsTransactionMetadata::new());
+            // in the case that a new milestone became solid
             if self.last_solid_milestone_index_known != ms_tangle().get_last_solid_milestone_index() {
                 self.last_solid_milestone_index_known = ms_tangle().get_last_solid_milestone_index();
-                self.update_confirmed_cone(self.last_solid_milestone_index_known);
+                self.update_transactions_referenced_by_milestone(self.last_solid_milestone_index_known);
+            } else {
+                self.inherit_otrsi_and_ytrsi_from_parents(&hash);
             }
-            self.propagate_otrsi_and_ytrsi(&hash);
             return Some(tx_ref);
         }
         None
     }
 
-    // once a milestone arrives, update otrsi and ytrsi of all transactions that are confirmed by this milestone.
-    // set otrsi and ytrsi values of confirmed transactions to:
+    // when a milestone arrives, otrsi and ytrsi of all transactions referenced by this milestone must be updated
+    // otrsi or ytrsi of transactions that are referenced by a previous milestone won't get updated
+    // set otrsi and ytrsi values of relevant transactions to:
     // otrsi=milestone_index
     // ytrsi=milestone_index
-    // otrsi or ytrsi of transactions that are confirmed by a previous milestone won't get updated.
-    fn update_confirmed_cone(&mut self, milestone_index: MilestoneIndex) {
-        let ms_hash = ms_tangle().get_milestone_hash(milestone_index).unwrap();
+    fn update_transactions_referenced_by_milestone(&mut self, milestone_index: MilestoneIndex) {
+        let mut visited = HashSet::new();
+        let mut to_visit = vec![ms_tangle().get_milestone_hash(milestone_index).unwrap()];
 
-        if ms_tangle().is_solid_transaction(&ms_hash) {
-            let mut parents = vec![ms_hash];
+        while let Some(tx_hash) = to_visit.pop() {
+            if visited.contains(&tx_hash) {
+                continue;
+            } else {
+                visited.insert(tx_hash.clone());
+            }
 
-            while let Some(tx_hash) = parents.pop() {
-                self.transaction_metadata.get_mut(&tx_hash).unwrap().confirmed = Some(milestone_index);
+            let metadata = self.transaction_metadata.get_mut(&tx_hash).unwrap();
+            metadata.confirmed = Some(milestone_index);
+            metadata.otrsi = Some(milestone_index);
+            metadata.ytrsi = Some(milestone_index);
 
-                // unwrap is safe since the transaction is solid
-                let tx_ref = ms_tangle().get(&tx_hash).unwrap();
+            // propagate the new otrsi and ytrsi values to the children of this transaction
+            // children who already have inherited the new otrsi and ytrsi values, won't get updated
+            for child in ms_tangle().get_children(&tx_hash) {
+                self.inherit_otrsi_and_ytrsi_from_parents(&child);
+            }
 
-                let mut metadata = WurtsTransactionMetadata::new();
-                metadata.otrsi = Some(milestone_index);
-                metadata.ytrsi = Some(milestone_index);
-                self.transaction_metadata.insert(tx_hash.clone(), metadata);
+            let tx_ref = ms_tangle().get(&tx_hash).unwrap();
 
-                if self
-                    .transaction_metadata
-                    .get(&tx_ref.trunk())
-                    .unwrap()
-                    .confirmed
-                    .is_none()
-                {
-                    parents.push(tx_ref.trunk().clone());
-                }
+            if self
+                .transaction_metadata
+                .get(&tx_ref.trunk())
+                .unwrap()
+                .confirmed
+                .is_none()
+            {
+                to_visit.push(tx_ref.trunk().clone());
+            }
 
-                if self
-                    .transaction_metadata
-                    .get(&tx_ref.branch())
-                    .unwrap()
-                    .confirmed
-                    .is_none()
-                {
-                    parents.push(tx_ref.branch().clone());
-                }
+            if self
+                .transaction_metadata
+                .get(&tx_ref.branch())
+                .unwrap()
+                .confirmed
+                .is_none()
+            {
+                to_visit.push(tx_ref.branch().clone());
             }
         }
     }
 
-    // this function tries to propagate the otrsi and ytrsi values so that
-    // the TSA can be performed on most recent values.
-    //
     // if the parents of this incoming transaction are solid,
     // or in other words, if this incoming transaction is solid,
-    // this function will propagate the otrsi and ytrsi of the parents to the incoming transaction.
+    // this incoming transaction will inherit the best otrsi and ytrsi of the parents.
     //
     // in case of an attack, missing transactions might not arrive at all.
     // the propagation of otrsi and ytrsi to a non-solid cone might be unnecessary, since the TSA
-    // will not select transactions from a non-solid cone.
+    // would not attach to a non-solid cone.
     // therefore, if the incoming transaction is not solid, it won't propagate.
     // this helps to avoid unnecessary tangle walks.
     //
-    // if the children of a transaction arrived before their parents, it means that this incoming transaction was
-    // missing. in this case, if the incoming transaction is solid, otrsi and ytrsi values need to be propagated to
-    // the solid future cone since they don't have otrsi and ytrsi values set.
-    fn propagate_otrsi_and_ytrsi(&mut self, root: &Hash) {
-        let mut children = vec![*root];
+    // if the children of the incoming transaction already arrived before, it means that this incoming transaction was
+    // missing. in this case, if the incoming transaction is solid, otrsi and ytrsi values need to be propagated to the
+    // the future cone since they might not have
+    // otrsi and ytrsi values set.
+    fn inherit_otrsi_and_ytrsi_from_parents(&mut self, root: &Hash) {
+        let mut visited = HashSet::new();
+        let mut to_visit = vec![*root];
 
-        while let Some(id) = children.pop() {
-            if !ms_tangle().is_solid_transaction(&id) {
+        while let Some(tx_hash) = to_visit.pop() {
+            if visited.contains(&tx_hash) {
+                continue;
+            } else {
+                visited.insert(tx_hash.clone());
+            }
+
+            if !ms_tangle().is_solid_transaction(&tx_hash) {
                 continue;
             }
 
-            // unwrap is safe since the transaction is solid
-            let tx_ref = ms_tangle().get(&id).unwrap();
-
-            // therefore also the parents are solid
+            // get the best otrsi and ytrsi of parents
+            let tx_ref = ms_tangle().get(&tx_hash).unwrap();
             let otrsi = min(
                 self.get_otrsi(&tx_ref.trunk()).unwrap(),
                 self.get_otrsi(&tx_ref.branch()).unwrap(),
@@ -127,13 +141,17 @@ impl WutrsTangle {
                 self.get_ytrsi(&tx_ref.branch()).unwrap(),
             );
 
-            let mut metadata = WurtsTransactionMetadata::new();
-            metadata.otrsi = Some(otrsi);
-            metadata.ytrsi = Some(ytrsi);
-            self.transaction_metadata.insert(id.clone(), metadata);
+            // in case the transaction has already inherited otrsi and ytrsi from the parents, continue
+            let metadata = self.transaction_metadata.get_mut(&tx_hash).unwrap();
+            if metadata.otrsi == Some(otrsi) && metadata.ytrsi == Some(ytrsi) {
+                continue;
+            } else {
+                metadata.otrsi = Some(otrsi);
+                metadata.ytrsi = Some(ytrsi);
+            }
 
-            for child in ms_tangle().get_children(&id).iter() {
-                children.push(*child);
+            for child in ms_tangle().get_children(&tx_hash).iter() {
+                to_visit.push(child.clone());
             }
         }
     }
@@ -168,22 +186,12 @@ impl WutrsTangle {
         let mut parent_otrsi_check = 2;
 
         if let Some(ma) = self.transaction_metadata.get(&tx_ref.trunk()) {
-            // NOTE: removed as suggested by muxxer
-            // if ma.score.unwrap_or(Score::NonLazy) == Score::Lazy {
-            //     return Score::Lazy;
-            // }
-
             if *ms_tangle().get_last_solid_milestone_index() - *ma.otrsi.unwrap() > OTRSI_DELTA {
                 parent_otrsi_check -= 1;
             }
         }
 
         if let Some(pa) = self.transaction_metadata.get(&tx_ref.branch()) {
-            // NOTE: removed as suggested by muxxer
-            // if pa.score.unwrap_or(Score::NonLazy) == Score::Lazy {
-            //     return Score::Lazy;
-            // }
-
             if *ms_tangle().get_last_solid_milestone_index() - *pa.otrsi.unwrap() > OTRSI_DELTA {
                 parent_otrsi_check -= 1;
             }
