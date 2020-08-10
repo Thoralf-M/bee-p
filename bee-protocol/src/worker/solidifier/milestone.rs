@@ -21,7 +21,6 @@ use log::{error, info, warn};
 const MILESTONE_REQUEST_RANGE: u8 = 50;
 
 type Receiver = crate::worker::Receiver<mpsc::Receiver<MilestoneSolidifierWorkerEvent>>;
-type TransactionReceiver = crate::worker::Receiver<mpsc::Receiver<TransactionSolidifierWorkerEvent>>;
 
 pub(crate) enum MilestoneSolidifierWorkerEvent {
     Trigger,

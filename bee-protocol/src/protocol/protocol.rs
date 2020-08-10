@@ -225,10 +225,10 @@ impl Protocol {
         shutdown.add_worker_shutdown(
             milestone_solidifier_worker_shutdown_tx,
             spawn(
-                MilestoneSolidifierWorker::new(Receiver::new(
-                    milestone_solidifier_worker_rx,
-                    milestone_solidifier_worker_shutdown_rx,
-                ), senders)
+                MilestoneSolidifierWorker::new(
+                    Receiver::new(milestone_solidifier_worker_rx, milestone_solidifier_worker_shutdown_rx),
+                    senders,
+                )
                 .run(),
             ),
         );
@@ -290,6 +290,7 @@ fn handle_last_milestone(last_milestone: &LastMilestone) {
 
 fn handle_last_solid_milestone(last_solid_milestone: &LastSolidMilestone) {
     tangle().update_last_solid_milestone_index(last_solid_milestone.0.index);
+    block_on(Protocol::reassign_transaction_solidifier(last_solid_milestone.0.index));
     // TODO block_on ?
     block_on(Protocol::broadcast_heartbeat(
         last_solid_milestone.0.index,

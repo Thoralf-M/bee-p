@@ -66,9 +66,7 @@ impl TransactionSolidifierWorker {
         info!("Running.");
 
         while let Some(TransactionSolidifierWorkerEvent(hash, index)) = self.receiver.next().await {
-            if self.solidify(hash, index).await {
-                Protocol::reassign_transaction_solidifier(index).await;
-            }
+            self.solidify(hash, index).await;
         }
 
         info!("Stopped.");
