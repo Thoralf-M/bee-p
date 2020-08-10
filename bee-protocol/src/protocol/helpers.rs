@@ -96,24 +96,36 @@ impl Protocol {
 
     // Solidifier
 
-    pub async fn trigger_transaction_solidification(hash: Hash, index: MilestoneIndex) {
-        if let Err(e) = Protocol::get()
-            .transaction_solidifier_worker
-            // TODO try to avoid clone
-            .clone()
-            .send(TransactionSolidifierWorkerEvent(hash, index))
-            .await
-        {
-            warn!("Triggering transaction solidification failed: {}.", e);
-        }
-    }
-
     pub async fn trigger_milestone_solidification() {
         if let Err(e) = Protocol::get()
             .milestone_solidifier_worker
             // TODO try to avoid clone
             .clone()
-            .send(MilestoneSolidifierWorkerEvent)
+            .send(MilestoneSolidifierWorkerEvent::Trigger)
+            .await
+        {
+            warn!("Triggering milestone solidification failed: {}.", e);
+        }
+    }
+
+    pub async fn reassign_transaction_solidifier(index: MilestoneIndex) {
+        if let Err(e) = Protocol::get()
+            .milestone_solidifier_worker
+            // TODO try to avoid clone
+            .clone()
+            .send(MilestoneSolidifierWorkerEvent::NewSolidMilestone(index))
+            .await
+        {
+            warn!("Reassigning transaction solidifier failed: {}.", e);
+        }
+    }
+
+    pub async fn trigger_transaction_solidification(hash: Hash, index: MilestoneIndex) {
+        if let Err(e) = Protocol::get()
+            .milestone_solidifier_worker
+            // TODO try to avoid clone
+            .clone()
+            .send(MilestoneSolidifierWorkerEvent::NewTransaction(hash, index))
             .await
         {
             warn!("Triggering milestone solidification failed: {}.", e);

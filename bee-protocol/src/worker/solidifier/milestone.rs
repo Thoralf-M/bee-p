@@ -9,26 +9,40 @@
 // an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and limitations under the License.
 
-use crate::{milestone::MilestoneIndex, protocol::Protocol, tangle::tangle};
-
+use crate::{
+    milestone::MilestoneIndex, protocol::Protocol, tangle::tangle, worker::solidifier::TransactionSolidifierWorkerEvent,
+};
 use bee_common::worker::Error as WorkerError;
+use bee_crypto::ternary::Hash;
 
-use futures::{channel::mpsc, stream::StreamExt};
-use log::info;
+use futures::{channel::mpsc, SinkExt, StreamExt};
+use log::{error, info, warn};
 
 const MILESTONE_REQUEST_RANGE: u8 = 50;
 
 type Receiver = crate::worker::Receiver<mpsc::Receiver<MilestoneSolidifierWorkerEvent>>;
+type TransactionReceiver = crate::worker::Receiver<mpsc::Receiver<TransactionSolidifierWorkerEvent>>;
 
-pub(crate) struct MilestoneSolidifierWorkerEvent;
+pub(crate) enum MilestoneSolidifierWorkerEvent {
+    Trigger,
+    NewSolidMilestone(MilestoneIndex),
+    NewTransaction(Hash, MilestoneIndex),
+}
 
 pub(crate) struct MilestoneSolidifierWorker {
     receiver: Receiver,
+    lower_index: MilestoneIndex,
+    senders: Vec<mpsc::Sender<TransactionSolidifierWorkerEvent>>,
 }
 
 impl MilestoneSolidifierWorker {
-    pub(crate) fn new(receiver: Receiver) -> Self {
-        Self { receiver }
+    pub(crate) fn new(receiver: Receiver, senders: Vec<mpsc::Sender<TransactionSolidifierWorkerEvent>>) -> Self {
+        let solid_index = tangle().get_last_solid_milestone_index();
+        Self {
+            receiver,
+            lower_index: solid_index + MilestoneIndex(1),
+            senders,
+        }
     }
 
     // async fn solidify(&self, hash: Hash, target_index: u32) -> bool {
@@ -90,9 +104,7 @@ impl MilestoneSolidifierWorker {
         }
     }
 
-    async fn solidify_milestone(&self) {
-        let target_index = tangle().get_last_solid_milestone_index() + MilestoneIndex(1);
-
+    async fn solidify_milestone(&mut self, target_index: MilestoneIndex) {
         // if let Some(target_hash) = tangle().get_milestone_hash(target_index) {
         //     if tangle().is_solid_transaction(&target_hash) {
         //         // TODO set confirmation index + trigger ledger
@@ -106,19 +118,54 @@ impl MilestoneSolidifierWorker {
         //         Protocol::trigger_transaction_solidification(target_hash, target_index).await;
         //     }
         // }
-        if let Some(target_hash) = tangle().get_milestone_hash(target_index) {
-            if !tangle().is_solid_transaction(&target_hash) {
-                Protocol::trigger_transaction_solidification(target_hash, target_index).await;
+        if let Some(sender) = self.senders.get_mut((target_index.0 - self.lower_index.0) as usize) {
+            if let Some(target_hash) = tangle().get_milestone_hash(target_index) {
+                if !tangle().is_solid_transaction(&target_hash) {
+                    if let Err(e) = sender
+                        .send(TransactionSolidifierWorkerEvent(target_hash, target_index))
+                        .await
+                    {
+                        warn!("Triggering transaction solidification failed: {}.", e);
+                    }
+                }
             }
+        } else {
+            error!("There is no solidifier running for milestone {}", target_index.0);
         }
     }
 
     pub(crate) async fn run(mut self) -> Result<(), WorkerError> {
         info!("Running.");
 
-        while let Some(MilestoneSolidifierWorkerEvent) = self.receiver.next().await {
-            self.request_milestones();
-            self.solidify_milestone().await;
+        while let Some(event) = self.receiver.next().await {
+            match event {
+                MilestoneSolidifierWorkerEvent::Trigger => {
+                    self.request_milestones();
+                    for i in 0..self.senders.len() as u32 {
+                        let index = self.lower_index + MilestoneIndex(i);
+                        self.solidify_milestone(index).await;
+                    }
+                }
+                MilestoneSolidifierWorkerEvent::NewSolidMilestone(index) => {
+                    if index != self.lower_index {
+                        error!(
+                            "New solid milestone with index {} does not match index {}",
+                            index.0, self.lower_index.0
+                        );
+                    } else {
+                        self.lower_index = self.lower_index + MilestoneIndex(1);
+                    }
+                }
+                MilestoneSolidifierWorkerEvent::NewTransaction(hash, index) => {
+                    if let Some(sender) = self.senders.get_mut((index.0 - self.lower_index.0) as usize) {
+                        if let Err(e) = sender.send(TransactionSolidifierWorkerEvent(hash, index)).await {
+                            warn!("Triggering transaction solidification failed: {}.", e);
+                        }
+                    } else {
+                        error!("There is no solidifier running for milestone {}", index.0);
+                    }
+                }
+            }
             // while tangle().get_last_solid_milestone_index() < tangle().get_last_milestone_index() {
             //     if !self.process_target(*tangle().get_last_solid_milestone_index() + 1).await {
             //         break;

@@ -55,7 +55,6 @@ pub struct Protocol {
     pub(crate) transaction_requester_worker: WaitPriorityQueue<TransactionRequesterWorkerEntry>,
     pub(crate) milestone_requester_worker: WaitPriorityQueue<MilestoneRequesterWorkerEntry>,
     pub(crate) milestone_validator_worker: mpsc::Sender<MilestoneValidatorWorkerEvent>,
-    pub(crate) transaction_solidifier_worker: mpsc::Sender<TransactionSolidifierWorkerEvent>,
     pub(crate) milestone_solidifier_worker: mpsc::Sender<MilestoneSolidifierWorkerEvent>,
     pub(crate) broadcaster_worker: mpsc::Sender<BroadcasterWorkerEvent>,
     pub(crate) peer_manager: PeerManager,
@@ -88,10 +87,6 @@ impl Protocol {
             mpsc::channel(config.workers.milestone_validator_worker_bound);
         let (milestone_validator_worker_shutdown_tx, milestone_validator_worker_shutdown_rx) = oneshot::channel();
 
-        let (transaction_solidifier_worker_tx, transaction_solidifier_worker_rx) =
-            mpsc::channel(config.workers.transaction_solidifier_worker_bound);
-        let (transaction_solidifier_worker_shutdown_tx, transaction_solidifier_worker_shutdown_rx) = oneshot::channel();
-
         let (milestone_solidifier_worker_tx, milestone_solidifier_worker_rx) =
             mpsc::channel(config.workers.milestone_solidifier_worker_bound);
         let (milestone_solidifier_worker_shutdown_tx, milestone_solidifier_worker_shutdown_rx) = oneshot::channel();
@@ -102,6 +97,8 @@ impl Protocol {
         let (status_worker_shutdown_tx, status_worker_shutdown_rx) = oneshot::channel();
 
         let (tps_worker_shutdown_tx, tps_worker_shutdown_rx) = oneshot::channel();
+
+        let transaction_solidifier_worker_bound = config.workers.transaction_solidifier_worker_bound;
 
         let protocol = Protocol {
             config,
@@ -114,7 +111,6 @@ impl Protocol {
             transaction_requester_worker: Default::default(),
             milestone_requester_worker: Default::default(),
             milestone_validator_worker: milestone_validator_worker_tx,
-            transaction_solidifier_worker: transaction_solidifier_worker_tx,
             milestone_solidifier_worker: milestone_solidifier_worker_tx,
             broadcaster_worker: broadcaster_worker_tx,
             peer_manager: PeerManager::new(network.clone()),
@@ -205,24 +201,34 @@ impl Protocol {
             ),
         };
 
-        shutdown.add_worker_shutdown(
-            transaction_solidifier_worker_shutdown_tx,
-            spawn(
-                TransactionSolidifierWorker::new(Receiver::new(
-                    transaction_solidifier_worker_rx,
-                    transaction_solidifier_worker_shutdown_rx,
-                ))
-                .run(),
-            ),
-        );
+        let mut senders = vec![];
 
+        for _ in 0..5 {
+            let (transaction_solidifier_worker_tx, transaction_solidifier_worker_rx) =
+                mpsc::channel(transaction_solidifier_worker_bound);
+            let (transaction_solidifier_worker_shutdown_tx, transaction_solidifier_worker_shutdown_rx) =
+                oneshot::channel();
+
+            shutdown.add_worker_shutdown(
+                transaction_solidifier_worker_shutdown_tx,
+                spawn(
+                    TransactionSolidifierWorker::new(Receiver::new(
+                        transaction_solidifier_worker_rx,
+                        transaction_solidifier_worker_shutdown_rx,
+                    ))
+                    .run(),
+                ),
+            );
+
+            senders.push(transaction_solidifier_worker_tx);
+        }
         shutdown.add_worker_shutdown(
             milestone_solidifier_worker_shutdown_tx,
             spawn(
                 MilestoneSolidifierWorker::new(Receiver::new(
                     milestone_solidifier_worker_rx,
                     milestone_solidifier_worker_shutdown_rx,
-                ))
+                ), senders)
                 .run(),
             ),
         );
