@@ -210,7 +210,7 @@ impl Protocol {
 
         let mut senders = vec![];
 
-        for _ in 0..5 {
+        for _ in 0..50 {
             let (transaction_solidifier_worker_tx, transaction_solidifier_worker_rx) =
                 mpsc::channel(transaction_solidifier_worker_bound);
             let (transaction_solidifier_worker_shutdown_tx, transaction_solidifier_worker_shutdown_rx) =
