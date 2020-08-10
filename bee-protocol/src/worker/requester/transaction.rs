@@ -18,7 +18,11 @@ use bee_crypto::ternary::Hash;
 use bee_ternary::T5B1Buf;
 
 use bytemuck::cast_slice;
-use futures::{channel::oneshot, future::FutureExt, select};
+use futures::{
+    channel::{oneshot, mpsc},
+    future::FutureExt,
+    select, StreamExt,
+};
 use log::info;
 
 use std::cmp::Ordering;
@@ -78,16 +82,21 @@ impl TransactionRequesterWorker {
         }
     }
 
-    pub(crate) async fn run(mut self, shutdown: oneshot::Receiver<()>) -> Result<(), WorkerError> {
+    pub(crate) async fn run(
+        mut self,
+        receiver: mpsc::Receiver<TransactionRequesterWorkerEntry>,
+        shutdown: oneshot::Receiver<()>,
+    ) -> Result<(), WorkerError> {
         info!("Running.");
 
         let mut shutdown_fused = shutdown.fuse();
+        let mut receiver_fused = receiver.fuse();
 
         loop {
             select! {
                 _ = shutdown_fused => break,
-                entry = Protocol::get().transaction_requester_worker.pop() => {
-                    if let TransactionRequesterWorkerEntry(hash, index) = entry {
+                entry = receiver_fused.next() => {
+                    if let Some(TransactionRequesterWorkerEntry(hash, index)) = entry {
                         if !tangle().is_solid_entry_point(&hash) && !tangle().contains(&hash) {
                             self.process_request(hash, index).await;
                         }

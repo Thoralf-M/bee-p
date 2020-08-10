@@ -71,11 +71,12 @@ impl Protocol {
     pub async fn request_transaction(hash: Hash, index: MilestoneIndex) {
         Protocol::get()
             .transaction_requester_worker
-            .push(TransactionRequesterWorkerEntry(hash, index));
+            .clone()
+            .send(TransactionRequesterWorkerEntry(hash, index)).await;
     }
 
     pub fn transaction_requester_is_empty() -> bool {
-        Protocol::get().transaction_requester_worker.is_empty()
+        false
     }
 
     // Heartbeat

@@ -52,7 +52,7 @@ pub struct Protocol {
     pub(crate) transaction_worker: mpsc::Sender<TransactionWorkerEvent>,
     pub(crate) transaction_responder_worker: mpsc::Sender<TransactionResponderWorkerEvent>,
     pub(crate) milestone_responder_worker: mpsc::Sender<MilestoneResponderWorkerEvent>,
-    pub(crate) transaction_requester_worker: WaitPriorityQueue<TransactionRequesterWorkerEntry>,
+    pub(crate) transaction_requester_worker: mpsc::Sender<TransactionRequesterWorkerEntry>,
     pub(crate) milestone_requester_worker: WaitPriorityQueue<MilestoneRequesterWorkerEntry>,
     pub(crate) milestone_validator_worker: mpsc::Sender<MilestoneValidatorWorkerEvent>,
     pub(crate) milestone_solidifier_worker: mpsc::Sender<MilestoneSolidifierWorkerEvent>,
@@ -77,6 +77,10 @@ impl Protocol {
 
         let (milestone_responder_worker_tx, milestone_responder_worker_rx) =
             mpsc::channel(config.workers.milestone_responder_worker_bound);
+
+        let (transaction_requester_worker_tx, transaction_requester_worker_rx) =
+            mpsc::channel(config.workers.transaction_requester_worker_bound);
+
         let (milestone_responder_worker_shutdown_tx, milestone_responder_worker_shutdown_rx) = oneshot::channel();
 
         let (transaction_requester_worker_shutdown_tx, transaction_requester_worker_shutdown_rx) = oneshot::channel();
@@ -108,7 +112,7 @@ impl Protocol {
             transaction_worker: transaction_worker_tx,
             transaction_responder_worker: transaction_responder_worker_tx,
             milestone_responder_worker: milestone_responder_worker_tx,
-            transaction_requester_worker: Default::default(),
+            transaction_requester_worker: transaction_requester_worker_tx,
             milestone_requester_worker: Default::default(),
             milestone_validator_worker: milestone_validator_worker_tx,
             milestone_solidifier_worker: milestone_solidifier_worker_tx,
@@ -160,7 +164,10 @@ impl Protocol {
 
         shutdown.add_worker_shutdown(
             transaction_requester_worker_shutdown_tx,
-            spawn(TransactionRequesterWorker::new().run(transaction_requester_worker_shutdown_rx)),
+            spawn(TransactionRequesterWorker::new().run(
+                transaction_requester_worker_rx,
+                transaction_requester_worker_shutdown_rx,
+            )),
         );
 
         shutdown.add_worker_shutdown(
