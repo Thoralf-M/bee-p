@@ -153,6 +153,7 @@ impl MilestoneSolidifierWorker {
                         );
                     } else {
                         self.lower_index = self.lower_index + MilestoneIndex(1);
+                        info!("Bumping lower milestone to {}", self.lower_index.0);
                     }
                 }
                 MilestoneSolidifierWorkerEvent::NewTransaction(hash, index) => {
@@ -161,7 +162,7 @@ impl MilestoneSolidifierWorker {
                             warn!("Triggering transaction solidification failed: {}.", e);
                         }
                     } else {
-                        error!("There is no solidifier running for milestone {}", index.0);
+                        warn!("There is no solidifier running for milestone {}", index.0);
                     }
                 }
             }
